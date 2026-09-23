@@ -1,0 +1,19 @@
+{
+  "name": "dealroom",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "apps-hub",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w apps/api",
+    "dev:app": "npm run dev -w apps/app",
+    "dev:hub": "npm run dev -w apps-hub",
+    "build": "npm run build -w apps/app",
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps-hub && npm run typecheck -w apps/app",
+    "eval": "node scripts/eval.mjs"
+  }
+}

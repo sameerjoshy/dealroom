@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local Worker development (gitignored).
+# All of these are already User-scoped on this machine; this file is only needed
+# if you want wrangler dev to see them explicitly.
+DEEPSEEK_API_KEY=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=

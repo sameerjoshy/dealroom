@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "apps-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-28",
+  "observability": { "enabled": true },
+  "services": [
+    { "binding": "DEALROOM", "service": "dealroom-api" },
+    { "binding": "DEALROOM_APP", "service": "dealroom-app" }
+  ]
+}
