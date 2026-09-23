@@ -45,12 +45,20 @@ function launcher(): Response {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname } = url;
 
     if (pathname === '/' || pathname === '') return launcher();
 
+    // API: the Worker strips /deal-room itself.
     if (pathname.startsWith('/deal-room/api')) return env.DEALROOM.fetch(request);
-    if (pathname.startsWith('/deal-room')) return env.DEALROOM_APP.fetch(request);
+
+    // App: strip the /deal-room prefix so the static-assets Worker serves from its root.
+    if (pathname.startsWith('/deal-room')) {
+      const stripped = new URL(request.url);
+      stripped.pathname = pathname.replace(/^\/deal-room/, '') || '/';
+      return env.DEALROOM_APP.fetch(new Request(stripped.toString(), request));
+    }
 
     return new Response('Not found', { status: 404 });
   },

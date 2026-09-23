@@ -30,9 +30,19 @@ npm run eval         # engine eval against a running Worker
 npm run typecheck    # api + hub typecheck, app build
 ```
 
-## Status
-Demo build. Engine runs on the seeded store (`apps/api/src/seed.ts`, relative dates).
-**Agents landed:** `deal-room` (brief + risks), `qualifier` (MEDDIC), `sniper` (email/asset
-drafts on play steps), `extractor` (diagnose intake + debrief) — DeepSeek behind a provider
-interface (`src/lib/llm.ts`), with a rule-only fallback when no key. Evals: `npm run eval`.
-**Not yet wired:** Supabase `dr_` store (`migrations/`), HubSpot pull/write-back, deploy.
+## Status — deployed
+- **Engine:** stall taxonomy + play loop, seeded fixtures (`apps/api/src/seed.ts`, relative dates).
+- **Agents:** `deal-room`, `qualifier`, `sniper`, `extractor` (DeepSeek behind `src/lib/llm.ts`; rule-only fallback without a key).
+- **Store:** `Repo` layer (`src/repo.ts`) — **SupabaseRepo** (dr_ tables, PostgREST) when `SUPABASE_*` is set, else **MemoryRepo**. Migration applied.
+- **HubSpot:** pull deals + contacts + close-date history (`/api/hubspot/sync`); write-back Notes + Tasks on approve.
+- **Deployed (Workers):** `dealroom-api`, `dealroom-app` (static assets), `apps-hub` (router + launcher) at `apps-hub.sameerjoshy.workers.dev`.
+- ⏳ **Pending (dashboard):** point `apps.gtm-360.com` at `apps-hub` — the deploy token lacks DNS + Workers-Routes write. Add a proxied record + route `apps.gtm-360.com/*` → `apps-hub` in the Cloudflare dashboard.
+
+## Deploy
+```
+npm run typecheck && npm run build
+(cd apps/api   && npx wrangler deploy)          # + wrangler secret bulk (DEEPSEEK/HUBSPOT/SUPABASE_*)
+(cd apps/app   && npx wrangler deploy)          # static assets
+(cd apps-hub   && npx wrangler deploy)          # router + launcher
+node scripts/apply-migration.mjs migrations/001_dr_init.sql
+```
