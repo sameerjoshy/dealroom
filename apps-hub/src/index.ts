@@ -9,7 +9,7 @@ export interface Env {
 
 const APPS = [
   { path: '/deal-room', name: 'Deal Room', desc: 'Why a deal is stuck, the play that moves it, and proof it worked.' },
-  { path: '/content-engine', name: 'Content Engine', desc: 'Topic to fact-checked article, in your voice.', soon: true },
+  { path: '/content-engine', name: 'Content Engine', desc: 'Topic to fact-checked article, in your voice.' },
 ];
 
 function launcher(): Response {
