@@ -2,8 +2,9 @@
 // Each app stays its own Worker; the hub only routes (no auth, no state).
 
 export interface Env {
-  DEALROOM: Fetcher;      // dealroom-api
-  DEALROOM_APP: Fetcher;  // deal-room static app
+  DEALROOM: Fetcher;           // dealroom-api
+  DEALROOM_APP: Fetcher;       // deal-room static app
+  CONTENT_ENGINE_APP: Fetcher; // content-engine static app
 }
 
 const APPS = [
@@ -53,11 +54,16 @@ export default {
     // API: the Worker strips /deal-room itself.
     if (pathname.startsWith('/deal-room/api')) return env.DEALROOM.fetch(request);
 
-    // App: strip the /deal-room prefix so the static-assets Worker serves from its root.
+    // App: strip the /<app> prefix so the static-assets Worker serves from its root.
     if (pathname.startsWith('/deal-room')) {
       const stripped = new URL(request.url);
       stripped.pathname = pathname.replace(/^\/deal-room/, '') || '/';
       return env.DEALROOM_APP.fetch(new Request(stripped.toString(), request));
+    }
+    if (pathname.startsWith('/content-engine')) {
+      const stripped = new URL(request.url);
+      stripped.pathname = pathname.replace(/^\/content-engine/, '') || '/';
+      return env.CONTENT_ENGINE_APP.fetch(new Request(stripped.toString(), request));
     }
 
     return new Response('Not found', { status: 404 });
