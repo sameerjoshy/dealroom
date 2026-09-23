@@ -19,7 +19,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent text-ink font-bold">DR</span>
             <div className="leading-tight">
               <div className="font-bold tracking-tight">Deal Room</div>
-              <div className="font-mono text-[10px] uppercase tracking-widest text-white/40">GTM-360</div>
+              <div className="font-mono text-[10px] uppercase tracking-widest text-white/60">GTM-360</div>
             </div>
           </div>
         </div>
@@ -41,10 +41,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="px-5 py-4 border-t border-white/10 space-y-2">
-          <a href="https://apps.gtm-360.com" className="flex items-center gap-2 text-xs text-white/40 hover:text-white/70">
+          <a href="https://apps.gtm-360.com" className="flex items-center gap-2 text-xs text-white/70 hover:text-white">
             <ExternalLink size={12} /> All apps
           </a>
-          <p className="text-[11px] text-white/30">Signed in · SSO</p>
+          <p className="text-[11px] text-white/60">Signed in · SSO</p>
         </div>
       </aside>
 

@@ -33,10 +33,10 @@ function launcher(): Response {
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
     .card{display:block;background:#fff;border:1px solid #E2E8F0;border-radius:14px;padding:22px;text-decoration:none;color:inherit;transition:.15s}
     .card:hover{box-shadow:0 6px 20px rgba(15,23,42,.08);border-color:#0A192F}
-    .card.soon{opacity:.6;pointer-events:none}
+    .card.soon{pointer-events:none;border-style:dashed}
     .card h2{margin:0 0 8px;font-size:16px}.card p{margin:0 0 16px;color:#64748B;font-size:13px;line-height:1.5}
-    .go{font-weight:600;color:#0D9488;font-size:13px}
-    .soon-tag{font-family:'DM Mono',monospace;font-size:9px;text-transform:uppercase;background:#F1F5F9;color:#64748B;padding:2px 6px;border-radius:6px;vertical-align:middle}
+    .go{font-weight:600;color:#0F766E;font-size:13px}
+    .soon-tag{font-family:'DM Mono',monospace;font-size:9px;text-transform:uppercase;background:#F1F5F9;color:#475569;padding:2px 6px;border-radius:6px;vertical-align:middle}
   </style></head>
   <body><header><span class="mark">G</span><div><div style="font-weight:700">GTM-360 Apps</div><div class="sub">Full products</div></div></header>
   <main><h1>Apps</h1><p class="lead">Full, standalone products. For the agents themselves, open the <a href="https://agents.gtm-360.com">Agent Portal</a>.</p>
