@@ -60,15 +60,15 @@ Deal Room runs on the seeded demo store in Supabase; agents (deal-room/qualifier
 
 ## 4. Verdict
 
-**Deal Room: ship-ready (demo).** **Content Engine: live but needs three fixes before it reads as a finished product.**
+**Deal Room: ship-ready (demo).** **Content Engine: live; naming/SEO now host-aware.**
 
-| # | Sev | Finding | Owner |
+| # | Sev | Finding | Status |
 |---|---|---|---|
-| 1 | **High** | Content Engine login allow-list missing `apps.gtm-360.com` | Supabase dashboard |
-| 2 | Medium | Content Engine brands "Agent Portal"; root shows the agent Showcase under `/content-engine` | content-engine app |
-| 3 | Medium | Content Engine SEO canonicals point at old domains | content-engine app |
-| 4 | Medium | Content Engine not under git (deploys not reproducible) | repo setup |
-| 5 | Low | Launcher labels Content Engine "soon" | apps-hub |
-| 6 | Low | Content Engine bundles heavy (code-split) | content-engine app |
+| 1 | High | Content Engine login allow-list missing `apps.gtm-360.com` | **Fixed** (dashboard) |
+| 2 | Medium | Content Engine branded "Agent Portal" | **Fixed** — host-aware branding: `/content-engine` = "Content Engine", `agents.gtm-360.com` = "Agent Portal" (in-app + tab title). *Remaining:* the logged-out root still shows the agent-engine Showcase; the Content Engine root should become content-focused. |
+| 3 | Medium | Content Engine SEO canonicals point at old domains | **Partial** — the static `<title>`/canonical still target the Agent Portal surface (correct for `agents.gtm-360.com`); full per-surface SEO needs separate deployments. |
+| 4 | Medium | content-engine not under git | **Fixed** — `github.com/sameerjoshy/content-engine` (secrets redacted). |
+| 5 | Low | Launcher labelled Content Engine "soon" | **Fixed** |
+| 6 | Low | Content Engine bundles heavy (code-split) | Open |
 
-Fix #5 now (trivial); #1 is a dashboard action; #2–#4/#6 are Content Engine work.
+**Remaining (Content Engine):** content-focused root; per-surface SEO; code-splitting.
