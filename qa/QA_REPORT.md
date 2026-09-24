@@ -72,3 +72,10 @@ Deal Room runs on the seeded demo store in Supabase; agents (deal-room/qualifier
 | 6 | Low | Content Engine bundles heavy (code-split) | Open |
 
 **Remaining (Content Engine):** content-focused root; per-surface SEO; code-splitting.
+
+### Content Engine — follow-up (done)
+- **Content-focused root** — `ContentLanding` screen for the logged-out Content Engine surface; the Agent Portal keeps its Showcase (host-aware).
+- **Per-surface SEO** — host-aware title + canonical + OG (`apps.gtm-360.com/content-engine`).
+- **Code-splitting** — route-level `lazy()`: main bundle **900 KB → 449 KB**.
+- **Naming** — "Content Engine" on the Content Engine surface; "Agent Portal" on `agents.gtm-360.com`.
+- Re-verified live: **0 a11y violations · 0 route failures · 0 dead links · 0 errors**.
