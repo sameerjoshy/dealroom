@@ -24,6 +24,7 @@ export interface Repo {
   getDealData(dealId: string): Promise<{ deal: Deal; stakeholders: Stakeholder[]; activities: Activity[]; events: EngagementEvent[]; plan: PlanMilestone[] } | null>;
   resetSeed(): Promise<void>;
   upsertDeals(deals: Deal[], stakeholders: Stakeholder[]): Promise<void>;
+  upsertActivities(activities: Activity[]): Promise<void>;
 
   listRuns(dealId?: string): Promise<PlayRun[]>;
   getRun(id: string): Promise<PlayRun | null>;
@@ -65,6 +66,13 @@ class MemoryRepo implements Repo {
     for (const s of stakeholders) {
       const i = this.current.stakeholders.findIndex((x) => x.id === s.id);
       if (i >= 0) this.current.stakeholders[i] = s; else this.current.stakeholders.push(s);
+    }
+  }
+
+  async upsertActivities(activities: Activity[]) {
+    for (const a of activities) {
+      const i = this.current.activities.findIndex((x) => x.id === a.id);
+      if (i >= 0) this.current.activities[i] = a; else this.current.activities.push(a);
     }
   }
 
@@ -151,6 +159,10 @@ class SupabaseRepo implements Repo {
     await this.upsert('dr_stakeholders', stakeholders.map((s) => normalize(s as unknown as Record<string, unknown>, STAKE_COLS)));
   }
 
+  async upsertActivities(activities: Activity[]): Promise<void> {
+    await this.upsert('dr_activities', activities.map((a) => normalize(a as unknown as Record<string, unknown>, ACTIVITY_COLS)));
+  }
+
   async listRuns(dealId?: string): Promise<PlayRun[]> {
     const q = dealId ? `dr_play_runs?deal_id=eq.${encodeURIComponent(dealId)}&select=*` : 'dr_play_runs?select=*';
     return this.rows<PlayRun>(q);
@@ -197,6 +209,7 @@ export interface RepoEnv { SUPABASE_URL?: string; SUPABASE_SERVICE_ROLE_KEY?: st
 
 const DEAL_COLS = ['id', 'workspace_id', 'hubspot_id', 'name', 'account', 'amount', 'stage', 'close_date', 'close_date_history', 'owner_id', 'owner_name', 'template_id', 'meddic', 'created_at'];
 const STAKE_COLS = ['id', 'deal_id', 'name', 'email', 'title', 'meddic_role', 'role_confirmed', 'sentiment', 'last_two_way_at', 'engagement_score', 'status'];
+const ACTIVITY_COLS = ['id', 'deal_id', 'type', 'direction', 'stakeholder_id', 'body', 'occurred_at'];
 
 /** PostgREST bulk inserts need every row to share the same keys. */
 function normalize(row: Record<string, unknown>, cols: string[]): Record<string, unknown> {

@@ -2,9 +2,13 @@
 // associations (with close-date history); write back Notes and Tasks.
 // Every call is best-effort — a HubSpot failure never breaks the app.
 
-import type { Deal, Stakeholder, Stage } from '@dealroom/contracts';
+import type { Activity, Deal, Stakeholder, Stage } from '@dealroom/contracts';
 
 const BASE = 'https://api.hubapi.com';
+
+const EMAIL_PROPS = ['hs_timestamp', 'hs_email_direction', 'hs_email_subject', 'hs_email_text', 'hs_email_from_email', 'hs_email_to_email'];
+const CALL_PROPS = ['hs_timestamp', 'hs_call_direction', 'hs_call_title', 'hs_call_body'];
+const MEETING_PROPS = ['hs_timestamp', 'hs_meeting_title', 'hs_meeting_body'];
 
 async function hs<T>(key: string, path: string, init?: RequestInit): Promise<T | null> {
   try {
@@ -45,6 +49,96 @@ interface HsDeal {
 interface HsContact {
   id: string;
   properties: Record<string, string | null>;
+}
+
+interface HsEngagement {
+  id: string;
+  properties: Record<string, string | null>;
+}
+
+/** Deal → associated object ids of a given type (v4 default associations). */
+async function associatedIds(key: string, dealId: string, toType: 'emails' | 'calls' | 'meetings'): Promise<string[]> {
+  const res = await hs<{ results?: { toObjectId: number | string }[] }>(
+    key, `/crm/v4/objects/deals/${dealId}/associations/${toType}?limit=50`,
+  );
+  return (res?.results ?? []).map((r) => String(r.toObjectId));
+}
+
+/** Batch-read objects by id (one call for the whole page). */
+async function readBatch(key: string, type: 'emails' | 'calls' | 'meetings', ids: string[], properties: string[]): Promise<HsEngagement[]> {
+  if (!ids.length) return [];
+  const res = await hs<{ results?: HsEngagement[] }>(key, `/crm/v3/objects/${type}/batch/read`, {
+    method: 'POST',
+    body: JSON.stringify({ properties, inputs: ids.slice(0, 100).map((id) => ({ id })) }),
+  });
+  return res?.results ?? [];
+}
+
+function toIso(ts?: string | null): string {
+  if (!ts) return new Date().toISOString();
+  const n = Number(ts);
+  return Number.isFinite(n) && ts.length > 8 ? new Date(n).toISOString() : ts;
+}
+
+/**
+ * Pull logged emails, calls and meetings for a deal as Activities. Only replies,
+ * meetings and calls are two-way; these are what the stall rules read. Inbound
+ * email is matched back to a mapped contact so the person's last-two-way recency
+ * stays honest. Bounded to `limit` engagements per type.
+ */
+export async function pullEngagements(
+  key: string,
+  hubspotDealId: string,
+  localDealId: string,
+  contactByEmail: Map<string, string>,
+  limit = 25,
+): Promise<{ activities: Activity[]; lastTouch: Map<string, string> }> {
+  const activities: Activity[] = [];
+  const lastTouch = new Map<string, string>();
+  const touch = (stakeholderId: string, at: string) => {
+    const prev = lastTouch.get(stakeholderId);
+    if (!prev || new Date(at) > new Date(prev)) lastTouch.set(stakeholderId, at);
+  };
+
+  const emails = await readBatch(key, 'emails', (await associatedIds(key, hubspotDealId, 'emails')).slice(0, limit), EMAIL_PROPS);
+  for (const e of emails) {
+    const p = e.properties;
+    const at = toIso(p.hs_timestamp);
+    const inbound = (p.hs_email_direction ?? '').toUpperCase().startsWith('INCOMING');
+    const direction = inbound ? 'in' : 'out';
+    activities.push({
+      id: `hs_em_${e.id}`, deal_id: localDealId, type: 'email', direction,
+      body: (p.hs_email_subject ?? p.hs_email_text ?? 'Email').slice(0, 240), occurred_at: at,
+    });
+    if (inbound) {
+      for (const addr of [p.hs_email_from_email, p.hs_email_to_email]) {
+        const sid = addr ? contactByEmail.get(addr.toLowerCase()) : undefined;
+        if (sid) touch(sid, at);
+      }
+    }
+  }
+
+  const calls = await readBatch(key, 'calls', (await associatedIds(key, hubspotDealId, 'calls')).slice(0, limit), CALL_PROPS);
+  for (const c of calls) {
+    const p = c.properties;
+    const at = toIso(p.hs_timestamp);
+    activities.push({
+      id: `hs_call_${c.id}`, deal_id: localDealId, type: 'call',
+      direction: (p.hs_call_direction ?? 'OUTBOUND').toUpperCase().startsWith('IN') ? 'in' : 'out',
+      body: (p.hs_call_title ?? p.hs_call_body ?? 'Call').slice(0, 240), occurred_at: at,
+    });
+  }
+
+  const meetings = await readBatch(key, 'meetings', (await associatedIds(key, hubspotDealId, 'meetings')).slice(0, limit), MEETING_PROPS);
+  for (const m of meetings) {
+    const p = m.properties;
+    activities.push({
+      id: `hs_mtg_${m.id}`, deal_id: localDealId, type: 'meeting', direction: 'in',
+      body: (p.hs_meeting_title ?? p.hs_meeting_body ?? 'Meeting').slice(0, 240), occurred_at: toIso(p.hs_timestamp),
+    });
+  }
+
+  return { activities, lastTouch };
 }
 
 /** Pull open+recent deals (with close-date history) and their contacts. */

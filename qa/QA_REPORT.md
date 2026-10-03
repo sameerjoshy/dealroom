@@ -2,6 +2,8 @@
 
 **Surface:** `apps.gtm-360.com` · **Date:** 2026-09-23 · **Method:** live browser crawl (Playwright), axe-core WCAG A/AA, link integrity, cross-app review by role.
 
+> **Update — 2026-10-03:** Deal Room hardening pass. Engine eval now **24/24** (`scripts/eval.mjs`), extended to cover the new Manager views and hardening behavior. Re-ran live QA: **0 route failures · 0 dead links · 0 console errors · 0 a11y violations** across 9 pages. Deal Room now also pulls HubSpot **engagements** (emails/calls/meetings), has structured logging + an error boundary, an opt-in SSO auth gate, and `002_dr_rls.sql` workspace policies. Residual Content Engine items (§4) unchanged.
+
 ---
 
 ## 1. Automated results (live)

@@ -8,8 +8,9 @@
 apps/app   React + Vite + Tailwind  (base '/deal-room/')
 apps/api   Cloudflare Worker        (routes, rules, plays, agents)
 packages/contracts   shared types + zod schemas + stall/play catalogue
-migrations/          dr_* schema (Supabase, shared project, dr_ prefix)
-scripts/             sync-registry (agent registry snapshot + drift gate)
+migrations/          dr_* schema (001 init · 002 RLS policies)
+scripts/             apply-migration · sql · eval.mjs (engine eval + drift gate)
+qa/                  qa.mjs (route crawl + links) · a11y.mjs (axe)
 docs/                SPEC.md · CLAUDE_REVIEW.md · APP_VS_AGENT.md · MARKET_RESEARCH.md
 ```
 
@@ -34,9 +35,16 @@ npm run typecheck    # api + hub typecheck, app build
 - **Engine:** stall taxonomy + play loop, seeded fixtures (`apps/api/src/seed.ts`, relative dates).
 - **Agents:** `deal-room`, `qualifier`, `sniper`, `extractor` (DeepSeek behind `src/lib/llm.ts`; rule-only fallback without a key).
 - **Store:** `Repo` layer (`src/repo.ts`) — **SupabaseRepo** (dr_ tables, PostgREST) when `SUPABASE_*` is set, else **MemoryRepo**. Migration applied.
-- **HubSpot:** pull deals + contacts + close-date history (`/api/hubspot/sync`); write-back Notes + Tasks on approve.
-- **Deployed (Workers):** `dealroom-api`, `dealroom-app` (static assets), `apps-hub` (router + launcher) at `apps-hub.sameerjoshy.workers.dev`.
-- ⏳ **Pending (dashboard):** point `apps.gtm-360.com` at `apps-hub` — the deploy token lacks DNS + Workers-Routes write. Add a proxied record + route `apps.gtm-360.com/*` → `apps-hub` in the Cloudflare dashboard.
+- **HubSpot:** pull deals + contacts + close-date history, **and logged engagements (emails/calls/meetings)** (`pullEngagements` → `dr_activities`, inbound email refreshes `last_two_way_at`); write-back Notes + Tasks on approve. `POST /api/hubspot/sync` (pass `{ "engagements": false }` to skip).
+- **Manager:** pipeline by stall · play performance (rates hidden < 5 runs) · **rep patterns vs team median** · **dismiss reasons per stall rule** · **forecast flags** (S6 + in-quarter).
+- **Hardening:** structured JSON request logging + request ids (`src/lib/obs.ts`), a top-level error boundary (unknown routes never throw HTML), and an **opt-in auth gate** (`src/lib/auth.ts` — HS256 JWT via `GTM360_SSO_SECRET` or `x-dealroom-key`; active only when `REQUIRE_AUTH=true`).
+- **RLS:** `migrations/002_dr_rls.sql` — workspace-membership policies (`auth.uid()` → `dr_workspace_members`) on the deal-scoped tables.
+- **Deployed (Workers):** `dealroom-api`, `dealroom-app` (static assets), `apps-hub` (router + launcher) — live behind `apps.gtm-360.com`.
+- ✅ `apps.gtm-360.com` is live (Pages domain proxy → `apps-hub` Worker).
+
+## Env vars (Worker `dealroom-api`)
+`DEEPSEEK_API_KEY` · `HUBSPOT_API_KEY` · `SUPABASE_URL` · `SUPABASE_SERVICE_ROLE_KEY` ·
+`REQUIRE_AUTH` (`true` to enforce) · `GTM360_SSO_SECRET` · `DEALROOM_API_KEY` (machine callers).
 
 ## Deploy
 ```
@@ -45,4 +53,12 @@ npm run typecheck && npm run build
 (cd apps/app   && npx wrangler deploy)          # static assets
 (cd apps-hub   && npx wrangler deploy)          # router + launcher
 node scripts/apply-migration.mjs migrations/001_dr_init.sql
+node scripts/apply-migration.mjs migrations/002_dr_rls.sql
+```
+
+## Verify
+```
+node scripts/eval.mjs http://localhost:8787   # engine + manager + hardening (24 checks)
+PLAYWRIGHT_PATH=<dir> node qa/qa.mjs            # live route crawl + link integrity
+PLAYWRIGHT_PATH=<dir> node qa/a11y.mjs          # axe WCAG A/AA
 ```

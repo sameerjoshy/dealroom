@@ -70,5 +70,25 @@ const diag = await post('/api/diagnose-deal', { text: 'Champion is engaged but c
 check('intake returns findings', diag.findings.length >= 1);
 check('intake recommends a play', Boolean(diag.recommended_play?.id));
 
+console.log('\nMANAGER — coaching, forecast, dismiss reasons');
+const mgr = await get('/api/manager/overview');
+check('rep patterns present', Array.isArray(mgr.rep_patterns) && mgr.rep_patterns.length >= 1);
+check('dismiss reasons present', Array.isArray(mgr.dismiss_reasons));
+check('forecast flags present', Array.isArray(mgr.forecast_flags));
+check('helix (S6, in-quarter) is forecast-flagged', mgr.forecast_flags.some((f) => f.deal_id === 'd-helix'));
+
+console.log('\nHARDENING — JSON errors + auth surface');
+const health = await get('/health');
+check('health reports auth state', typeof health.auth === 'boolean');
+const raw = (method, p, body) => fetch(`${BASE}${p}`, {
+  method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined,
+});
+const unknown = await raw('GET', '/api/does-not-exist');
+check('unknown route → JSON 404', unknown.status === 404 && (unknown.headers.get('content-type') ?? '').includes('json'));
+const badRun = await raw('POST', '/api/play-runs', {});
+check('missing fields → 400 JSON', badRun.status === 400 && (badRun.headers.get('content-type') ?? '').includes('json'));
+const noHub = await raw('POST', '/api/hubspot/sync', {});
+check('hubspot sync w/o config → 400 JSON', noHub.status === 400);
+
 console.log(`\n${failures.length ? `FAILURES (${failures.length}):\n` + failures.map((f) => '  - ' + f).join('\n') : '✅ all evals passed'}`);
 process.exit(failures.length ? 1 : 0);

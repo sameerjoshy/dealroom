@@ -1,5 +1,5 @@
 import type {
-  CoachingCard, Coverage, DealRecord, DealRoomOutput, MeddicFieldName, PlayRun, PlayRunStep, QualifierOutput,
+  Activity, CoachingCard, Coverage, DealRecord, DealRoomOutput, MeddicFieldName, PlayRun, PlayRunStep, QualifierOutput,
 } from '@dealroom/contracts';
 import { MEDDIC_FIELDS, STALLS } from '@dealroom/contracts';
 import { assess } from './rules';
@@ -8,7 +8,9 @@ import { getRepo, type Repo } from './repo';
 import { id, nowIso } from './lib/util';
 import { DEAL_ROOM_AGENT, QUALIFIER_AGENT } from './agents/manifest';
 import { draft, extract, runManifest } from './agents/run';
-import { createTask, pullDeals, writeNote } from './lib/hubspot';
+import { createTask, pullDeals, pullEngagements, writeNote } from './lib/hubspot';
+import { withObservability, log } from './lib/obs';
+import { authenticate, type AuthContext } from './lib/auth';
 
 export interface Env {
   DEEPSEEK_API_KEY?: string;
@@ -16,7 +18,16 @@ export interface Env {
   SUPABASE_URL?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   ENVIRONMENT?: string;
+  REQUIRE_AUTH?: string;
+  GTM360_SSO_SECRET?: string;
+  DEALROOM_API_KEY?: string;
 }
+
+/** Routes that mutate state require an authenticated caller when auth is on. */
+function isMutating(method: string, path: string): boolean {
+  return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE'
+    || path.startsWith('/r/');
+} 
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -120,7 +131,7 @@ async function playsList(repo: Repo) {
   });
 }
 
-async function createRun(dealId: string, playId: string, repo: Repo, depth = 0): Promise<PlayRun | null> {
+async function createRun(dealId: string, playId: string, repo: Repo, depth = 0, actor = 'u-amy'): Promise<PlayRun | null> {
   const play = PLAY_BY_ID[playId];
   const rec = await record(dealId, repo);
   if (!play || !rec) return null;
@@ -131,7 +142,7 @@ async function createRun(dealId: string, playId: string, repo: Repo, depth = 0):
     steps: play.steps.map((s) => ({ label: s.label, status: 'pending' as const })),
   };
   await repo.putRun(run);
-  await repo.audit({ actor: 'u-amy', action: 'play.proposed', entity: 'play_run', entity_id: run.id, detail: { deal_id: dealId, play_id: playId } });
+  await repo.audit({ actor, action: 'play.proposed', entity: 'play_run', entity_id: run.id, detail: { deal_id: dealId, play_id: playId } });
   return run;
 }
 
@@ -142,7 +153,7 @@ const STATIC_STEP: Record<string, string> = {
   hubspot_task: 'HubSpot task created',
 };
 
-async function executeSteps(run: PlayRun, repo: Repo, env: Env): Promise<PlayRun> {
+async function executeSteps(run: PlayRun, repo: Repo, env: Env, actor: string): Promise<PlayRun> {
   const play = PLAY_BY_ID[run.play_id];
   const rec = await record(run.deal_id, repo);
   const champion = rec?.stakeholders.find((s) => s.meddic_role === 'champion');
@@ -167,10 +178,10 @@ async function executeSteps(run: PlayRun, repo: Repo, env: Env): Promise<PlayRun
   run.steps = steps;
   run.state = 'verifying';
   run.approved_at = nowIso();
-  run.approved_by = 'u-amy';
+  run.approved_by = actor;
   run.verify_until = new Date(Date.now() + play.window_days * 86_400_000).toISOString();
   await repo.putRun(run);
-  await repo.audit({ actor: 'u-amy', action: 'play.approved', entity: 'play_run', entity_id: run.id, detail: { steps: steps.length } });
+  await repo.audit({ actor, action: 'play.approved', entity: 'play_run', entity_id: run.id, detail: { steps: steps.length } });
 
   // Best-effort HubSpot write-back (Notes + Task) when the deal is linked.
   const hsDeal = rec?.deal.hubspot_id;
@@ -183,12 +194,12 @@ async function executeSteps(run: PlayRun, repo: Repo, env: Env): Promise<PlayRun
   return run;
 }
 
-async function approveRun(runId: string, repo: Repo, env: Env): Promise<PlayRun | null> {
+async function approveRun(runId: string, repo: Repo, env: Env, actor = 'u-amy'): Promise<PlayRun | null> {
   const run = await repo.getRun(runId);
   if (!run) return null;
   run.state = 'executing';
   await repo.putRun(run);
-  return executeSteps(run, repo, env);
+  return executeSteps(run, repo, env, actor);
 }
 
 async function simulateRun(runId: string, outcome: 'moved' | 'not_moved', repo: Repo): Promise<PlayRun | null> {
@@ -207,7 +218,7 @@ async function simulateRun(runId: string, outcome: 'moved' | 'not_moved', repo: 
     run.state = 'not_moved';
     run.outcome = 'No response in the window.';
     await repo.putRun(run);
-    const next = await createRun(run.deal_id, play.fallback, repo, run.depth + 1);
+    const next = await createRun(run.deal_id, play.fallback, repo, run.depth + 1, 'system');
     if (next) { run.fallback_run_id = next.id; await repo.putRun(run); }
     await repo.audit({ actor: 'system', action: 'play.fallback', entity: 'play_run', entity_id: run.id, detail: { fallback: play.fallback } });
     return (await repo.getRun(run.id))!;
@@ -219,9 +230,22 @@ async function simulateRun(runId: string, outcome: 'moved' | 'not_moved', repo: 
   return run;
 }
 
+function median(nums: number[]): number {
+  if (!nums.length) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 async function managerOverview(repo: Repo) {
   const runs = await repo.listRuns();
   const byStall = new Map<string, { count: number; value: number }>();
+  const repAgg = new Map<string, { deals: number; stalls: number; byStall: Map<string, number> }>();
+  const forecast: { deal_id: string; name: string; account: string; amount: number; close_date: string; earliest: string }[] = [];
+  const now = new Date();
+  const qEnd = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3 + 3, 0, 23, 59, 59, 999);
+
   for (const deal of await repo.listDeals()) {
     const r = (await record(deal.id, repo))!;
     for (const s of r.stalls) {
@@ -229,28 +253,87 @@ async function managerOverview(repo: Repo) {
       cur.count += 1; cur.value += deal.amount;
       byStall.set(s.stall_id, cur);
     }
+    const rep = deal.owner_name || 'Unassigned';
+    const agg = repAgg.get(rep) ?? { deals: 0, stalls: 0, byStall: new Map<string, number>() };
+    agg.deals += 1; agg.stalls += r.stalls.length;
+    for (const s of r.stalls) agg.byStall.set(s.stall_id, (agg.byStall.get(s.stall_id) ?? 0) + 1);
+    repAgg.set(rep, agg);
+
+    const s6 = r.stalls.find((s) => s.stall_id === 'S6');
+    if (s6 && new Date(deal.close_date) <= qEnd) {
+      forecast.push({ deal_id: deal.id, name: deal.name, account: deal.account, amount: deal.amount, close_date: deal.close_date, earliest: r.reality.earliest });
+    }
   }
+
   const pipeline = [...byStall.entries()]
     .map(([stall_id, v]) => ({ stall_id, name: STALLS[stall_id as keyof typeof STALLS].name, severity: STALLS[stall_id as keyof typeof STALLS].severity, ...v }))
     .sort((a, b) => STALLS[a.stall_id as keyof typeof STALLS].precedence - STALLS[b.stall_id as keyof typeof STALLS].precedence);
+
   const playStats = PLAYS.filter((p) => p.built).map((p) => {
     const pr = runs.filter((r) => r.play_id === p.id);
     const moved = pr.filter((r) => r.state === 'moved_after_play').length;
     return { play_id: p.id, name: p.name, runs: pr.length, moved, rate: pr.length >= 5 ? Math.round((moved / pr.length) * 100) : null };
   });
-  return { pipeline, play_stats: playStats, escalations: runs.filter((r) => r.state === 'escalated') };
+
+  // Rep patterns — average stalls per deal vs the team median (coaching, not blame).
+  const avgs = [...repAgg.values()].map((v) => v.stalls / Math.max(v.deals, 1));
+  const teamMedian = median(avgs);
+  const repPatterns = [...repAgg.entries()]
+    .map(([rep, v]) => {
+      const avg = v.stalls / Math.max(v.deals, 1);
+      const top = [...v.byStall.entries()].sort((a, b) => b[1] - a[1])[0];
+      return {
+        rep, deals: v.deals, avg_stalls: round1(avg), vs_median: round1(avg - teamMedian),
+        top_stall_id: top?.[0] ?? null,
+        top_stall_name: top ? STALLS[top[0] as keyof typeof STALLS].name : null,
+        coaching: avgs.length > 1 && avg > teamMedian,
+      };
+    })
+    .sort((a, b) => b.vs_median - a.vs_median);
+
+  // Dismiss reasons aggregated per stall rule — where the model and the rep disagree.
+  const dismissByStall = new Map<string, Map<string, number>>();
+  for (const run of runs.filter((r) => r.state === 'dismissed')) {
+    const reasons = dismissByStall.get(run.stall_id) ?? new Map<string, number>();
+    const reason = run.dismiss_reason ?? 'not now';
+    reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+    dismissByStall.set(run.stall_id, reasons);
+  }
+  const dismissReasons = [...dismissByStall.entries()].map(([stall_id, reasons]) => ({
+    stall_id, name: STALLS[stall_id as keyof typeof STALLS]?.name ?? stall_id,
+    total: [...reasons.values()].reduce((n, v) => n + v, 0),
+    reasons: [...reasons.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
+  })).sort((a, b) => b.total - a.total);
+
+  return {
+    pipeline, play_stats: playStats, rep_patterns: repPatterns, team_median_stalls: round1(teamMedian),
+    dismiss_reasons: dismissReasons, forecast_flags: forecast,
+    escalations: runs.filter((r) => r.state === 'escalated'),
+  };
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    return withObservability(request, 'dealroom-api', (reqId) => handle(request, env, reqId));
+  },
+};
+
+async function handle(request: Request, env: Env, reqId: string): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/deal-room/, '');
     const method = request.method;
     const repo = getRepo(env);
     if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
+    const ctx = await authenticate(request, env);
+    if (isMutating(method, path) && !ctx) {
+      log('warn', 'auth.rejected', { req_id: reqId, path, method });
+      return json({ error: 'unauthorized', req_id: reqId }, 401);
+    }
+    const actor = ctx?.actor ?? 'demo';
+
     if (method === 'GET' && path === '/health') {
-      return json({ ok: true, service: 'dealroom-api', llm: Boolean(env.DEEPSEEK_API_KEY), store: env.SUPABASE_URL ? 'supabase' : 'memory', time: nowIso() });
+      return json({ ok: true, service: 'dealroom-api', llm: Boolean(env.DEEPSEEK_API_KEY), store: env.SUPABASE_URL ? 'supabase' : 'memory', auth: env.REQUIRE_AUTH === 'true', time: nowIso() });
     }
     if (method === 'GET' && path === '/api/today') return json(await today(repo));
     if (method === 'GET' && path === '/api/deals') return json(await dealsList(repo));
@@ -303,13 +386,13 @@ export default {
     if (method === 'POST' && path === '/api/play-runs') {
       const body = (await request.json().catch(() => ({}))) as { deal_id?: string; play_id?: string; approve?: boolean };
       if (!body.deal_id || !body.play_id) return json({ error: 'deal_id and play_id required' }, 400);
-      const run = await createRun(body.deal_id, body.play_id, repo);
+      const run = await createRun(body.deal_id, body.play_id, repo, 0, actor);
       if (!run) return json({ error: 'deal or play not found' }, 404);
-      return json(body.approve ? await approveRun(run.id, repo, env) : run, 201);
+      return json(body.approve ? await approveRun(run.id, repo, env, actor) : run, 201);
     }
     const approveMatch = path.match(/^\/api\/play-runs\/([^/]+)\/approve$/);
     if (method === 'POST' && approveMatch) {
-      const run = await approveRun(approveMatch[1], repo, env);
+      const run = await approveRun(approveMatch[1], repo, env, actor);
       return run ? json(run) : json({ error: 'not found' }, 404);
     }
     const dismissMatch = path.match(/^\/api\/play-runs\/([^/]+)\/dismiss$/);
@@ -320,7 +403,7 @@ export default {
       run.state = 'dismissed';
       run.dismiss_reason = body.reason ?? 'not now';
       await repo.putRun(run);
-      await repo.audit({ actor: 'u-amy', action: 'play.dismissed', entity: 'play_run', entity_id: run.id, detail: { reason: run.dismiss_reason } });
+      await repo.audit({ actor, action: 'play.dismissed', entity: 'play_run', entity_id: run.id, detail: { reason: run.dismiss_reason } });
       return json(run);
     }
     const simMatch = path.match(/^\/api\/play-runs\/([^/]+)\/simulate$/);
@@ -335,10 +418,10 @@ export default {
       if (!body.deal_ids?.length || !body.play_id) return json({ error: 'deal_ids and play_id required' }, 400);
       const runs: PlayRun[] = [];
       for (const dealId of body.deal_ids) {
-        const r = await createRun(dealId, body.play_id, repo);
-        if (r) { const done = await approveRun(r.id, repo, env); if (done) runs.push(done); }
+        const r = await createRun(dealId, body.play_id, repo, 0, actor);
+        if (r) { const done = await approveRun(r.id, repo, env, actor); if (done) runs.push(done); }
       }
-      await repo.audit({ actor: 'u-amy', action: 'play.batch_approved', entity: 'play_run', entity_id: body.play_id, detail: { count: runs.length } });
+      await repo.audit({ actor, action: 'play.batch_approved', entity: 'play_run', entity_id: body.play_id, detail: { count: runs.length } });
       return json({ approved: runs.length, runs });
     }
 
@@ -356,11 +439,31 @@ export default {
 
     if (method === 'POST' && path === '/api/hubspot/sync') {
       if (!env.HUBSPOT_API_KEY) return json({ error: 'HubSpot not configured' }, 400);
-      const body = (await request.json().catch(() => ({}))) as { limit?: number };
+      const body = (await request.json().catch(() => ({}))) as { limit?: number; engagements?: boolean };
       const { deals, stakeholders } = await pullDeals(env.HUBSPOT_API_KEY, body.limit ?? 15);
+
+      // Two-way signal (P1): pull logged emails/calls/meetings and let inbound
+      // email refresh each mapped contact's last-two-way recency.
+      let activities: Activity[] = [];
+      if (body.engagements !== false) {
+        const contactByEmail = new Map<string, string>();
+        for (const s of stakeholders) if (s.email) contactByEmail.set(s.email.toLowerCase(), s.id);
+        for (const d of deals) {
+          if (!d.hubspot_id) continue;
+          const { activities: a, lastTouch } = await pullEngagements(env.HUBSPOT_API_KEY, d.hubspot_id, d.id, contactByEmail);
+          activities = activities.concat(a);
+          for (const s of stakeholders) {
+            if (s.deal_id !== d.id) continue;
+            const at = lastTouch.get(s.id);
+            if (at && (!s.last_two_way_at || new Date(at) > new Date(s.last_two_way_at))) s.last_two_way_at = at;
+          }
+        }
+      }
+
       await repo.upsertDeals(deals, stakeholders);
-      await repo.audit({ actor: 'system', action: 'hubspot.sync', entity: 'workspace', entity_id: 'demo-ws', detail: { deals: deals.length, stakeholders: stakeholders.length } });
-      return json({ synced: true, deals: deals.length, stakeholders: stakeholders.length });
+      if (activities.length) await repo.upsertActivities(activities);
+      await repo.audit({ actor: 'system', action: 'hubspot.sync', entity: 'workspace', entity_id: 'demo-ws', detail: { deals: deals.length, stakeholders: stakeholders.length, activities: activities.length } });
+      return json({ synced: true, deals: deals.length, stakeholders: stakeholders.length, activities: activities.length });
     }
 
     if (method === 'POST' && path === '/api/hubspot/writeback') {
@@ -372,13 +475,12 @@ export default {
       const summary = `Deal Room — play: ${PLAY_BY_ID[run.play_id]?.name}\n\n` + run.steps.map((s) => `• ${s.label}`).join('\n');
       const noted = await writeNote(env.HUBSPOT_API_KEY, deal.hubspot_id, summary);
       const tasked = await createTask(env.HUBSPOT_API_KEY, deal.hubspot_id, `Deal Room: follow up on ${PLAY_BY_ID[run.play_id]?.name}`, 3);
-      await repo.audit({ actor: 'u-amy', action: 'hubspot.writeback', entity: 'play_run', entity_id: run.id, detail: { noted, tasked } });
+    await repo.audit({ actor, action: 'hubspot.writeback', entity: 'play_run', entity_id: run.id, detail: { noted, tasked } });
       return json({ ok: noted || tasked, note: noted, task: tasked });
     }
 
-    return json({ error: 'not found', path }, 404);
-  },
-};
+    return json({ error: 'not found', path, req_id: reqId }, 404);
+}
 
 // ── Diagnose a deal (intake) ─────────────────────────────────────────────────
 async function diagnoseIntake(text: string, name: string, env: Env) {
